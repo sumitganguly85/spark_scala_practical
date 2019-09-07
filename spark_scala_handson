@@ -1,0 +1,156 @@
+CREATE EXTERNAL TABLE clickstream(clicktimestamp timestamp, userid String) 
+ROW FORMAT DELIMITED 
+FIELDS TERMINATED BY ',' 
+STORED AS TEXTFILE
+LOCATION '/user/sumit/clickstrmdata1'
+tblproperties ("skip.header.line.count"="1");
+
+
+
+create external table clickstreamop
+(clicktimestamp timestamp, userid String, SessionId string)
+row format delimited
+fields terminated by '|'
+lines terminated by '\n'
+stored as parquetfile
+location '/user/sumit/clickstrmdataop';
+
+create external table clickstreamop
+(clicktimestamp timestamp, userid String, SessionId string)
+row format delimited
+fields terminated by '|'
+lines terminated by '\n'
+stored as parquetfile
+location '/user/sumit/clickstrmdataop';
+
+create external table daywisesessioncount
+(daywisecount bigint, sessiondate date)
+row format delimited
+fields terminated by ','
+lines terminated by '\n'
+stored as textfile
+location '/user/sumit/daywisesessioncount';
+
+
+create external table userdaywisespent
+(userid string, timespent_hrs string, spentdate date)
+row format delimited
+fields terminated by ','
+lines terminated by '\n'
+stored as textfile
+location '/user/sumit/userdaywisespent';
+
+
+create external table usermonthwisespent
+(userid string, timespent_hrs string, spentmonth string)
+row format delimited
+fields terminated by ','
+lines terminated by '\n'
+stored as textfile
+location '/user/sumit/usermonthwisespent';
+
+
+import com.hortonworks.hwc.HiveWarehouseSession
+import com.hortonworks.hwc.HiveWarehouseSession._
+import org.apache.spark.sql.expressions.Window
+import org.apache.spark.sql.functions._
+
+val hive = HiveWarehouseSession.session(spark).build()
+hive.setDatabase("default")
+val dclickstream=hive.execute("select * from clickstream")
+val dclickstreamwindow = Window.partitionBy("userid").orderBy(asc("clicktimestamp"))
+val dclickstreammod = dclickstream.withColumn("prevtimestamp",lag("clicktimestamp",1, null).over(dclickstreamwindow)).withColumn("nexttimestamp",lead("clicktimestamp",1, null).over(dclickstreamwindow))
+val dclickstreamgap = dclickstreammod.withColumn("gapprev",col("clicktimestamp").cast("long") - col("prevtimestamp").cast("long")).withColumn("gapnxt",col("nexttimestamp").cast("long") - col("clicktimestamp").cast("long"))
+var dcNew = dclickstreamgap.withColumn("SessionId", when($"gapprev".isNull and $"gapnxt"/60D > 30, rand()).when($"gapprev".isNotNull and $"gapnxt"/60D <= 30, rand()).otherwise(null))
+val dcFinal = dcNew.drop("prevtimestamp").drop("nexttimestamp").drop("gapprev").drop("gapnxt")
+dcFinal.write.format("parquet").mode(org.apache.spark.sql.SaveMode.Overwrite).parquet("/user/sumit/clickstrmdataop/")
+
+
+//For Question 3 (First Use Case)
+
+dcNew = dcNew.withColumn("timespent", when($"gapprev".isNull and $"gapnxt"/60D > 30, 30*60).when($"gapnxt".isNull and $"gapprev"/60D > 30, 30*60).otherwise($"gapnxt"))
+
+dcNew.createOrReplaceTempView("clickstreamfinal")
+val dfDayWiseSessionCount = spark.sql("select count(date(clicktimestamp)) day_wise_no_of_session,date(clicktimestamp) from clickstreamfinal group by date(clicktimestamp)")
+dfDayWiseSessionCount.coalesce(1).write.format("csv").mode("Overwrite").option("header", "false").option("delimiter", ",").option("quoteMode", "true").save("/user/sumit/daywisesessioncount")
+
+
+//For Question 3 (First Second Case)
+
+val dfUserDayWiseSpent = spark.sql("select userid,timespent_hrs,day from (select userid,date(clicktimestamp) day, case when (sum(timespent) over(partition by userid,date(clicktimestamp)))/3600 is null then 'Awaiting Update' else cast((sum(timespent) over(partition by userid,date(clicktimestamp)))/3600 as string) end as timespent_hrs, row_number() over(partition by userid,date(clicktimestamp) order by date(clicktimestamp)) row_num from clickstreamfinal) where row_num=1")
+dfUserDayWiseSpent.withColumn("spentdate",col("day")).coalesce(1).write.partitionBy("day").format("csv").mode("Overwrite").option("header", "false").option("delimiter", ",").option("quoteMode", "true").save("/user/sumit/userdaywisespent/")
+
+
+//For Question 3 (First Second Case)
+
+val dfUserMonthWiseSpent = spark.sql("select userid,spent_hrs,year_month from(select userid,year_month,(sum(timespent) over(partition by userid,year_month))/3600 as spent_hrs, row_number() over(partition by userid,year_month order by year_month) row_num from (select userid,timespent,concat(year(clicktimestamp),'-',month(clicktimestamp)) as year_month from clickstreamfinal)) where row_num=1")
+dfUserMonthWiseSpent.withColumn("spent_month",col("year_month")).coalesce(1).write.partitionBy("year_month").format("csv").mode("Overwrite").option("header", "false").option("delimiter", ",").option("quoteMode", "true").save("/user/sumit/usermonthwisespent/")
+
+
+
+
+
+
+val expr = concat_ws(",", dfDayWiseSessionCount.columns.map(col): _*)
+dfDayWiseSessionCount.select(expr).map(_.getString(0)).write.format("csv").mode(org.apache.spark.sql.SaveMode.Overwrite).save("/user/sumit/daywisesessioncount")
+
+
+
+
+
+
+
+
+
+dcNew.write.format("parquet").mode(org.apache.spark.sql.SaveMode.Overwrite).parquet("data.parquet")
+
+
+dfRP2OBJGoodsReceipt.write.mode("overwrite").format(HiveWarehouseSession().HIVE_WAREHOUSE_CONNECTOR).option("table", "RP2_OBJ_Goods_Receipt_SP").save()
+
+
+val r = scala.util.Random
+
+val dcNew = dclickstreamgap.withColumn("SessionId", when($"gapprev".isNull and $"gapnxt"/60D > 30, rand()).otherwise(null))
+
+
+
+val newDf = df.withColumn("D", when($"B".isNull or $"B" === "", 0).otherwise(1))
+
+
+
+
+
+
+
+
+
+val dclickstreamgap = dclickstreammod.withColumn("gap",from_unixtime(unix_timestamp(col("prevtimestamp")),"YYYY-MM-dd HH:mm:ss").minus(from_unixtime(unix_timestamp(col("clicktimestamp"))),"YYYY-MM-dd HH:mm:ss"))
+
+
+val dclickstreamgap = dclickstreammod.withColumn("gap",from_unixtime(unix_timestamp(col("prevtimestamp")),"YYYY-MM-dd HH:mm:ss"))
+val dclickstreamgap = dclickstreammod.withColumn("gap",from_unixtime(unix_timestamp(col("clicktimestamp")),"YYYY-MM-dd HH:mm:ss"))
+
+
+df.select(from_unixtime(unix_timestamp(col("cr_dt")).minus(5 * 60), "YYYY-MM-dd HH:mm:ss"))
+
+
+
+
+
+
+
+
+
+val leadDf = df.withColumn("new_col", lag("volume", 1, 0).over(w))
+
+
+val lagCol = lag(col("clicktimestamp"), null).over(dclickstreamwindow)
+
+
+
+
+dclickstream.withColumn("lag", lag("clicktimestamp") over dclickstreamwindow).show
+
+
+
+dfrawdata.withColumn('PrevStockOpenValue', fn.lead('StockOpenValue').over(stockdatawindow)) 
